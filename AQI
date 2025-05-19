@@ -1,0 +1,130 @@
+# 📦 Install required packages if running locally
+# pip install pandas numpy scikit-learn matplotlib seaborn streamlit
+
+%%writefile app1.py
+import streamlit as st
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+data = pd.read_csv("Dataset_AQI.csv", encoding='ISO-8859-1')
+# 🎨 Streamlit page config
+st.set_page_config(page_title="AQI Predictor", layout="centered")
+
+# 📌 Title and Description
+st.title("🌿 Air Quality Index (AQI) Predictor 🌿")
+st.write("""
+Predict AQI based on environmental pollutant levels using a trained Random Forest Regression model.
+Enter pollutant concentrations below and get instant AQI predictions.
+""")
+# 📌 Preprocessing: handle missing values
+numeric_cols = ['PM2.5', 'PM10', 'NO2', 'SO2', 'CO']
+for col in numeric_cols:
+    data[col].fillna(data[col].median(), inplace=True)
+# Remove duplicates
+data.drop_duplicates(inplace=True)
+
+# Outlier Handling (IQR Method)
+for col in numeric_cols:
+    Q1 = data[col].quantile(0.25)
+    Q3 = data[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    data[col] = np.where(data[col] > upper, upper, data[col])
+    data[col] = np.where(data[col] < lower, lower, data[col])
+
+# 📌 Feature Engineering
+data['Total_Pollutants'] = data['PM2.5'] + data['PM10'] + data['NO2'] + data['SO2'] + data['CO']
+data['PM_Ratio'] = data['PM2.5'] / (data['PM10'] + 1)
+data['NO2_SO2_Ratio'] = data['NO2'] / (data['SO2'] + 1)
+data['High_CO_Flag'] = np.where(data['CO'] > 2, 1, 0)
+
+# Convert 'AQI' to numeric
+data['AQI'] = pd.to_numeric(data['AQI'], errors='coerce')
+data.dropna(subset=['AQI'], inplace=True)
+
+# 📌 Feature Scaling
+scaler = StandardScaler()
+scaled_features = numeric_cols + ['Total_Pollutants']
+data[scaled_features] = scaler.fit_transform(data[scaled_features])
+
+# 📌 Define Features & Target
+feature_cols = ['PM2.5', 'PM10', 'NO2', 'SO2', 'CO', 'Total_Pollutants', 'PM_Ratio', 'NO2_SO2_Ratio', 'High_CO_Flag']
+X = data[feature_cols]
+y = data['AQI']
+
+# 📌 Train-Test Split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 📈 Train Random Forest Model
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# 📌 User Input Form
+st.sidebar.header("🔍 Enter Pollutant Levels")
+def user_input_features():
+    PM25 = st.sidebar.number_input("PM2.5 (µg/m³)", min_value=0.0, value=60.0)
+    PM10 = st.sidebar.number_input("PM10 (µg/m³)", min_value=0.0, value=90.0)
+    NO2 = st.sidebar.number_input("NO₂ (ppb)", min_value=0.0, value=20.0)
+    SO2 = st.sidebar.number_input("SO₂ (ppb)", min_value=0.0, value=10.0)
+    CO = st.sidebar.number_input("CO (ppm)", min_value=0.0, value=1.0)
+    return PM25, PM10, NO2, SO2, CO
+
+PM25, PM10, NO2, SO2, CO = user_input_features()
+
+# 📌 Prepare Input Data
+input_data = pd.DataFrame({
+    'PM2.5': [PM25],
+    'PM10': [PM10],
+    'NO2': [NO2],
+    'SO2': [SO2],
+    'CO': [CO],
+})
+
+input_data['Total_Pollutants'] = input_data[['PM2.5', 'PM10', 'NO2', 'SO2', 'CO']].sum(axis=1)
+input_data['PM_Ratio'] = input_data['PM2.5'] / (input_data['PM10'] + 1)
+input_data['NO2_SO2_Ratio'] = input_data['NO2'] / (input_data['SO2'] + 1)
+input_data['High_CO_Flag'] = np.where(input_data['CO'] > 2, 1, 0)
+
+# 📌 Scale input values
+input_data_scaled = input_data.copy()
+input_data_scaled[numeric_cols + ['Total_Pollutants']] = scaler.transform(input_data[numeric_cols + ['Total_Pollutants']])
+
+# 📈 Predict AQI
+prediction = model.predict(input_data_scaled)
+
+# 📊 Display Prediction
+st.subheader("📊 Predicted AQI Value")
+st.success(f"{prediction[0]:.2f}")
+
+# 📉 Optional: Show feature importance
+if st.checkbox("Show Feature Importance"):
+    st.subheader("🎯 Feature Importance")
+    importance = model.feature_importances_
+    fig, ax = plt.subplots()
+    ax.barh(feature_cols, importance)
+    ax.set_xlabel("Importance Score")
+    ax.set_title("Feature Importance from Random Forest")
+    st.pyplot(fig)
+
+# 📈 Model Performance (Optional)
+if st.checkbox("Show Model Performance on Test Data"):
+    y_pred_test = model.predict(X_test)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
+    r2 = r2_score(y_test, y_pred_test)
+    st.write(f"**Test RMSE:** {rmse:.2f}")
+    st.write(f"**Test R² Score:** {r2:.2f}")
+
+    # Actual vs Predicted Plot
+    fig2, ax2 = plt.subplots()
+    sns.scatterplot(x=y_test, y=y_pred_test, ax=ax2)
+    ax2.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], color='red')
+    ax2.set_xlabel("Actual AQI")
+    ax2.set_ylabel("Predicted AQI")
+    ax2.set_title("Actual vs Predicted AQI")
+    st.pyplot(fig2)
